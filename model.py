@@ -1,5 +1,3 @@
-from pyexpat import model
-
 import streamlit as st
 import pandas as pd
 import json
@@ -189,8 +187,6 @@ def gurobi_model(data):
     return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
 
 
-# =========================================================================================================
-
 ## ------- STREAMLIT FRONT-END -------
 
 st.set_page_config(layout="wide", page_title="Case Otimização UFMG")
@@ -206,30 +202,51 @@ st.divider()
 
 with st.sidebar:
     st.title("Menu Principal")
-    aba_selecionada = st.radio("Ir para:", ["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"])
+
+    aba_selecionada = st.radio(
+        "Ir para:",
+        ["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"]
+    )
+    
     st.divider()
     st.caption("Material desenvolvido e elaborado por Cassotis Consulting")
 
 
+# tab_pdf, tab_input, tab_code, tab_output = st.tabs(["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"])
+
 if aba_selecionada == "Material auxiliar":
     st.header("Material Auxiliar")
-    st.markdown("Apresentação do case:")
+    st.markdown("""
+    Apresentação do case:
+    """)
+
     pdf_viewer("Case_UFMG2026.pdf")
 
 elif aba_selecionada == "Dados de Entrada":
+
+    ## -------------- Dados de Produtos --------------
     st.header("Dados de Produtos")
+    
     col1, col2 = st.columns(2)
     with col1:
+        st.subheader("Disponibilidade dos Produtos")
         df_avail = pd.DataFrame(data["m_product_delivery_availabity"]).T
         df_avail.columns = [f" {col} [kt]" for col in df_avail.columns]
         df_avail["Rota"] = pd.Series(data["k_material_route"])
-        st.dataframe(df_avail, width="stretch")
+        st.dataframe(df_avail, use_container_width=True)
+        
     with col2:
-        df_qual = pd.DataFrame(data["m_product_quality"]).T * 1e2
+        st.subheader("Qualidade dos Produtos")
+        df_qual = pd.DataFrame(data["m_product_quality"]).T
+        df_qual = df_qual * 1e2
         df_qual.columns = [f" {col} [%]" for col in df_qual.columns]
-        st.dataframe(df_qual, width="stretch")
+        st.dataframe(df_qual, use_container_width=True)
 
+
+
+    ## -------------- Dados de Pilhas --------------
     st.header("Dados das Pilhas")
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Condição Inicial das Pilhas")
@@ -240,7 +257,7 @@ elif aba_selecionada == "Dados de Entrada":
                 dic.append(record)
         df_initial_weight = pd.DataFrame(dic).set_index(["Posição", "Pilha"])
         df_initial_weight.columns = [f" {col} [kt]" for col in df_initial_weight.columns]
-        st.dataframe(df_initial_weight, width="content")
+        st.dataframe(df_initial_weight, use_container_width=False)
 
     with col2:
         st.subheader("Condição Final das Pilhas")
@@ -251,7 +268,7 @@ elif aba_selecionada == "Dados de Entrada":
                 dic.append(record)
         df_final_weight = pd.DataFrame(dic).set_index(["Posição", "Pilha"])
         df_final_weight.columns = [f" {col} [kt]" for col in df_final_weight.columns]
-        st.dataframe(df_final_weight, width="content")
+        st.dataframe(df_final_weight, use_container_width=False)
 
     st.subheader("Status das Pilhas ao Longo do Tempo")
     status_records = []
@@ -261,21 +278,22 @@ elif aba_selecionada == "Dados de Entrada":
             for t, st_val in enumerate(status_list):
                 record[f"t{t+1}"] = st_val
             status_records.append(record)
-    st.dataframe(pd.DataFrame(status_records).set_index(["Posição", "Pilha"]), width="stretch")
+    st.dataframe(pd.DataFrame(status_records).set_index(["Posição", "Pilha"]), use_container_width=True)
 
+
+    ## -------------- Dados de Fornecedores --------------
     st.header("Dados de Fornecedores")
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Relação Fornecedor-Produto")
         dic = []
-        mat_route = data["k_material_route"]
         for supplier, products in data["SupplierProducts"].items():
             for p in products:
-                rota = mat_route[p]
-                modo = "Trem" if rota.upper() in ["TREM", "RAIL"] else "Rodoviário"
-                record = {"Fornecedor": supplier, "Produto": p, "Modal": modo}
+                record = {"Fornecedor (rodoviário)": supplier, "Produto": p}
                 dic.append(record)
         st.dataframe(pd.DataFrame(dic), hide_index=True)
+
 
     with col2:
         st.subheader("Capacidade do Trem por Produto")
@@ -298,7 +316,9 @@ elif aba_selecionada == "Dados de Entrada":
     df_supplier_delivery_capacity.columns = [f" {col} [kt]" for col in df_supplier_delivery_capacity.columns]
     st.dataframe(df_supplier_delivery_capacity)
 
+    ## -------------- Dados de Fornecedores --------------
     st.header("Dados do Equipamento")
+
     col1, col2 = st.columns(2)
     with col1:  
         st.subheader("Qualidade alvo")
@@ -320,22 +340,19 @@ elif aba_selecionada == "Dados de Entrada":
     df_demand.columns = [f" {col} [kt]" for col in df_demand.columns]
     st.dataframe(df_demand)
 
+    ## -------------- Dados do Pátio --------------
     st.header("Dados do Pátio")
     df_daily_capacity = pd.DataFrame([{"Pátio": "Pátio 1", "Capacidade max de movimentação diária [kt]": data["m_dailyCapacity"]}]).set_index("Pátio")
-    st.dataframe(df_daily_capacity, width="content")
+    st.dataframe(df_daily_capacity, use_container_width=False)
 
 
 elif aba_selecionada == "Código do Modelo":
     st.header("Instanciando o Modelo")
     st.markdown("Exemplo da estruturação dos conjuntos e parâmetros a partir dos dados de entrada:")
-    code_snippet = '''
-    def carregar_dados(filepath="data_piles.json"):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
     
-    data = carregar_dados()
-    model = gp.Model("Pile_Case_UFMG")
-    # ... código de extração dos dados do dicionário ...
+    code_snippet = '''
+
+    exemplo
     '''
     st.code(code_snippet, language='python')
 
@@ -344,185 +361,10 @@ elif aba_selecionada == "Resultados":
     
     if st.button("Executar Modelo", type="primary"):
         with st.spinner("Resolvendo modelo..."):
-            has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real = gurobi_model(data)
+            has_solution, model = gurobi_model(data)
             
             if has_solution:
-                st.success(f"Solução ótima encontrada. Função Objetivo: {model.ObjVal:.4f}")
+                st.success(f"Solução ótima encontrada. OF: {model.ObjVal:.4f}")
                 
-                Periods = 15
-                PilePositions = data["PilePositions"]
-                Piles = data["Piles"]
-                Products = data["Products"]
-                QualityIndicators = data["QualityIndicators"]
-                Suppliers = data["Suppliers"]
-                SupplierProducts = data["SupplierProducts"]
-                qual = data["m_product_quality"]
-                mat_route = data["k_material_route"]
-                p_status = data["k_pile_status"]
-                p_weight_init = data["m_initial_pile_weight"]
-                to_equip = data["m_to_equipment"]
-                daily_cap = data["m_dailyCapacity"]
-                p_weight_target = data["m_pile_weight"]
-
-                tab_saida, tab_evolucao, tab_qualidade, tab_desvios, tab_validacao = st.tabs([
-                    "🚚 1. Saída p/ Pilha", 
-                    "📊 2. Evolução da Pilha", 
-                    "🔥 3. Qualidade Sintetizada", 
-                    "🎯 4. Desvios de Qualidade",
-                    "✅ 5. Validação do Processo"
-                ])
-                
-                # ABA 1: Saídas e Movimentações
-                with tab_saida:
-                    st.subheader("Transportes Realizados (Fornecedor ➔ Pilha)")
-                    records_x = []
-                    movimentacoes = {t: 0.0 for t in range(Periods)}
-                    
-                    for (t, m, ps, p), var in x.items():
-                        if var.X > 1e-4:
-                            # CORREÇÃO 1: Apenas atribui o fornecedor se ele existir no SupplierProducts do JSON
-                            f = next((forn for forn, prods in SupplierProducts.items() if m in prods), "Sem Fornecedor Mapeado")
-                            
-                            # CORREÇÃO 2: Pega o valor exato que está no JSON
-                            rota = mat_route[m]
-                            modo = "🚂 Trem" if rota.upper() in ["RAIL", "TREM"] else "🚛 Rodoviário"
-                            
-                            records_x.append({
-                                "Período": t + 1, "Fornecedor": f, "Produto": m, 
-                                "Posição Destino": ps, "Pilha Destino": p,
-                                "Qtd [kt]": var.X, "Modal": modo
-                            })
-                            movimentacoes[t] += var.X
-                    
-                    if records_x:
-                        st.dataframe(pd.DataFrame(records_x).style.format({"Qtd [kt]": "{:.2f}"}), use_container_width=True)
-                    else:
-                        st.info("Nenhum transporte realizado.")
-
-                    st.subheader("Movimentações no Pátio (Check de Capacidade)")
-                    df_mov = pd.DataFrame([
-                        {"Período": t + 1, "Movimentado [kt]": movimentacoes[t], "Capacidade Máxima [kt]": daily_cap, "Utilização [%]": (movimentacoes[t]/daily_cap)*100}
-                        for t in range(Periods)
-                    ])
-                    st.dataframe(df_mov.style.format({"Movimentado [kt]": "{:.2f}", "Utilização [%]": "{:.1f}"}), use_container_width=True)
-
-
-                # ABA 2: Evolução da Pilha e Mistura (Blend Tracking)
-                with tab_evolucao:
-                    st.subheader("Estado da Pilha e Composição Instantânea")
-                    st.markdown("Acompanhamento exato de quanto de cada minério existe dentro da pilha ao final de cada período.")
-                    
-                    inventory = { (-1, ps, p): {"Massa Inicial (Sem Qualidade)": p_weight_init[ps][p]} for ps in PilePositions for p in Piles[ps] }
-                    for ps in PilePositions:
-                        for p in Piles[ps]:
-                            for m in Products:
-                                inventory[(-1, ps, p)][m] = 0.0
-                                
-                    evol_records = []
-                    for t in range(Periods):
-                        for ps in PilePositions:
-                            for p in Piles[ps]:
-                                curr_inv = inventory[(t-1, ps, p)].copy()
-                                for m in Products:
-                                    curr_inv[m] += x[t, m, ps, p].X
-                                    
-                                total_current = sum(curr_inv.values())
-                                saida = saida_real[t, ps, p].X
-                                
-                                if total_current > 1e-4 and saida > 1e-4:
-                                    for key in curr_inv:
-                                        curr_inv[key] -= saida * (curr_inv[key] / total_current)
-                                        
-                                inventory[(t, ps, p)] = curr_inv
-                                status = p_status[ps][p][t]
-                                
-                                if pile_mass[t, ps, p].X > 1e-4:
-                                    rec = {"Período": t + 1, "Posição": ps, "Pilha": p, "Status": status, "Massa Total [kt]": pile_mass[t, ps, p].X}
-                                    for key, val in curr_inv.items():
-                                        if val > 1e-4:
-                                            rec[f"{key} [kt]"] = val
-                                    evol_records.append(rec)
-
-                    if evol_records:
-                        df_evol = pd.DataFrame(evol_records).fillna(0)
-                        st.dataframe(df_evol.style.format(precision=2), use_container_width=True)
-                    else:
-                        st.info("Nenhuma pilha possui massa ao longo do horizonte.")
-
-
-                # ABA 3: Qualidade do Sintetizado
-                with tab_qualidade:
-                    st.subheader("Qualidade Real Alimentada na Sinterização")
-                    
-                    sinter_records = []
-                    for t in range(Periods):
-                        total_saida = sum(saida_real[t, ps, p].X for ps in PilePositions for p in Piles[ps])
-                        if total_saida > 1e-4:
-                            feed_composition = {m: 0.0 for m in Products}
-                            feed_composition["Massa Inicial"] = 0.0
-                            
-                            for ps in PilePositions:
-                                for p in Piles[ps]:
-                                    saida_p = saida_real[t, ps, p].X
-                                    if saida_p > 1e-4:
-                                        temp_inv = inventory[(t-1, ps, p)].copy()
-                                        for m in Products: temp_inv[m] += x[t, m, ps, p].X
-                                        tot_p = sum(temp_inv.values())
-                                        
-                                        for m in Products: feed_composition[m] += saida_p * (temp_inv[m] / tot_p)
-                                        feed_composition["Massa Inicial"] += saida_p * (temp_inv["Massa Inicial (Sem Qualidade)"] / tot_p)
-                            
-                            mass_for_qual = sum(feed_composition[m] for m in Products)
-                            feed_qual = {}
-                            for q in QualityIndicators:
-                                q_val = sum(feed_composition[m] * qual[m][q] for m in Products)
-                                feed_qual[q] = (q_val / mass_for_qual) * 100 if mass_for_qual > 1e-4 else 0.0
-                                
-                            rec = {"Período": t + 1, "Total Alimentado [kt]": total_saida}
-                            for q in QualityIndicators: rec[f"Qualidade {q} [%]"] = feed_qual[q]
-
-                            sinter_records.append(rec)
-                            
-                    if sinter_records:
-                        df_sinter = pd.DataFrame(sinter_records).fillna(0)
-                        st.dataframe(df_sinter.style.format(precision=2), use_container_width=True)
-                    else:
-                        st.warning("A Sinterização não foi alimentada em nenhum período.")
-
-
-                # ABA 4: Validação
-                with tab_validacao:
-                    st.subheader("Verificação do Processo e Restrições")
-                    
-                    st.markdown("**1. Atendimento da Demanda da Sinterização**")
-                    unmet = []
-                    for t in range(Periods):
-                        for ps in PilePositions:
-                            for p in Piles[ps]:
-                                esperada = to_equip[ps][p][t]
-                                if esperada > 0:
-                                    real = saida_real[t, ps, p].X
-                                    if esperada - real > 1e-4:
-                                        unmet.append({"Período": t+1, "Posição": ps, "Pilha": p, "Esperada [kt]": esperada, "Atendida [kt]": real, "Falta [kt]": esperada - real})
-                    if unmet:
-                        st.error("❌ Houve demanda não atendida em alguns períodos.")
-                        st.dataframe(pd.DataFrame(unmet).style.format(precision=2), use_container_width=True)
-                    else:
-                        st.success("✅ Toda a demanda requerida pela Sinterização foi rigorosamente atendida!")
-                        
-                    st.divider()
-                    st.markdown("**2. Metas de Construção das Pilhas (Massa Alvo)**")
-                    target_check = []
-                    for ps in PilePositions:
-                        for p in Piles[ps]:
-                            if ps in p_weight_target and p in p_weight_target[ps]:
-                                meta = p_weight_target[ps][p]
-                                alcançado = sum(x[t, m, ps, p].X for t in range(Periods) for m in Products)
-                                target_check.append({
-                                    "Posição": ps, "Pilha": p, "Meta JSON [kt]": meta, 
-                                    "Total Adicionado [kt]": alcançado, "Diferença": meta - alcançado
-                                })
-                    st.dataframe(pd.DataFrame(target_check).style.format(precision=2), use_container_width=True)
-
             else:
-                st.error("Não foi possível encontrar solução ótima. Verifique os dados.")
+                st.error("Não foi possível encontrar solução viável.")
