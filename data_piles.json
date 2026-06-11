@@ -1,0 +1,123 @@
+{
+  "Products": ["Minério A", "Minério B", "Minério C", "Minério D", "Minério E", "Minério F", "Minério G", "Minério H", "Minério I", "Minério J", "Minério K", "Minério L", "Minério M", "Minério N"],
+  "QualityIndicators": ["FeT", "SiO2", "Al2O3"],
+  "Equipments": ["Sinterização"],
+  "Suppliers": ["Fornecedor 1", "Fornecedor 2", "Fornecedor 3", "Fornecedor 4", "Fornecedor 5"],
+  "PilePositions": ["Posição 1", "Posição 2"],
+
+  "m_product_delivery_availabity": {
+    "Minério A": {"min": 0.0, "max": 12.0}, "Minério B": {"min": 0.0, "max": 6.0},
+    "Minério C": {"min": 0.0, "max": 9.0}, "Minério D": {"min": 0.0, "max": 5.0},
+    "Minério E": {"min": 0.0, "max": 5.0}, "Minério F": {"min": 0.0, "max": 9.5},
+    "Minério G": {"min": 0.0, "max": 5.0}, "Minério H": {"min": 0.0, "max": 1.0},
+    "Minério I": {"min": 0.0, "max": 3.9}, "Minério J": {"min": 0.0, "max": 2.0},
+    "Minério K": {"min": 0.0, "max": 3.5}, "Minério L": {"min": 0.0, "max": 7.5},
+    "Minério M": {"min": 0.0, "max": 2.0}, "Minério N": {"min": 0.0, "max": 0.5}
+  },
+
+  "m_product_quality": {
+    "Minério A": {"FeT": 0.614, "SiO2": 0.078, "Al2O3": 0.009},
+    "Minério B": {"FeT": 0.607, "SiO2": 0.070, "Al2O3": 0.012},
+    "Minério C": {"FeT": 0.6318, "SiO2": 0.0576, "Al2O3": 0.0065},
+    "Minério D": {"FeT": 0.6347, "SiO2": 0.055, "Al2O3": 0.0114},
+    "Minério E": {"FeT": 0.5255, "SiO2": 0.048, "Al2O3": 0.013},
+    "Minério F": {"FeT": 0.625, "SiO2": 0.073, "Al2O3": 0.0115},
+    "Minério G": {"FeT": 0.588, "SiO2": 0.045, "Al2O3": 0.04},
+    "Minério H": {"FeT": 0.626, "SiO2": 0.06, "Al2O3": 0.025},
+    "Minério I": {"FeT": 0.61, "SiO2": 0.067, "Al2O3": 0.016},
+    "Minério J": {"FeT": 0.614, "SiO2": 0.07, "Al2O3": 0.019},
+    "Minério K": {"FeT": 0.57, "SiO2": 0.07, "Al2O3": 0.038},
+    "Minério L": {"FeT": 0.565, "SiO2": 0.069, "Al2O3": 0.0056},
+    "Minério M": {"FeT": 0.544, "SiO2": 0.073, "Al2O3": 0.009},
+    "Minério N": {"FeT": 0.55, "SiO2": 0.075, "Al2O3": 0.025}
+  },
+
+  "SupplierProducts": {
+    "Fornecedor 1": ["Minério A", "Minério M"],
+    "Fornecedor 2": ["Minério B"],
+    "Fornecedor 3": ["Minério C"],
+    "Fornecedor 4": ["Minério D"],
+    "Fornecedor 5": ["Minério K", "Minério L"]
+  },
+
+  "m_supplier_delivery_capacity": {
+    "Fornecedor 1": [3.0, 3.0, 3.0, 1.5, 1.5, 3.0, 3.0, 3.0, 3.0, 3.0, 1.5, 1.5, 3.0, 3.0, 3.0],
+    "Fornecedor 2": [1.5, 1.5, 1.5, 1.0, 1.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0, 1.5, 1.5, 1.5],
+    "Fornecedor 3": [4.0, 4.0, 4.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0, 4.0, 2.0, 2.0, 4.0, 4.0, 4.0],
+    "Fornecedor 4": [1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+    "Fornecedor 5": [2.0, 2.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 2.0, 2.0, 2.0]
+  },
+
+  "m_train_capacity": {
+    "Minério A": 0, "Minério B": 0, "Minério C": 0, "Minério D": 0,
+    "Minério E": 2.5, "Minério F": 4.5, "Minério G": 5, "Minério H": 0.5,
+    "Minério I": 4, "Minério J": 1, "Minério K": 0, "Minério L": 0,
+    "Minério M": 0, "Minério N": 2
+  },
+
+  "k_material_route": {
+    "Minério A": "Road", "Minério B": "Road", "Minério C": "Road", "Minério D": "Road",
+    "Minério E": "Rail", "Minério F": "Rail", "Minério G": "Rail", "Minério H": "Rail",
+    "Minério I": "Rail", "Minério J": "Rail", "Minério K": "Road", "Minério L": "Road",
+    "Minério M": "Road", "Minério N": "Rail"
+  },
+
+  "Piles": {
+    "Posição 1": ["Pilha 11", "Pilha 12", "Pilha 13"],
+    "Posição 2": ["Pilha 21", "Pilha 22"]
+  },
+
+  "k_pile_initial_status": {
+    "Posição 1": {
+      "Pilha 11": "CONSUMO",
+      "Pilha 12": "NOVA",
+      "Pilha 13": "NOVA"
+    },
+    "Posição 2": {
+      "Pilha 21": "PRONTA",
+      "Pilha 22": "NOVA"
+    }
+  },
+
+  "k_pile_status": {
+    "Posição 1": {
+      "Pilha 11": ["CONSUMO", "CONSUMO", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA"],
+      "Pilha 12": ["VAZIA", "VAZIA", "CONSTRUCAO", "CONSTRUCAO", "CONSTRUCAO", "CONSTRUCAO", "PRONTA", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "VAZIA"],
+      "Pilha 13": ["VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "CONSTRUCAO"]
+    },
+    "Posição 2": {
+      "Pilha 21": ["PRONTA", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "CONSUMO", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA"],
+      "Pilha 22": ["VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "VAZIA", "CONSTRUCAO", "CONSTRUCAO", "CONSTRUCAO", "CONSTRUCAO", "PRONTA", "CONSUMO", "CONSUMO"]
+    }
+  },
+
+  "m_pile_weight": {
+    "Posição 1": {"Pilha 12": 27.0, "Pilha 13": 4.0},
+    "Posição 2": {"Pilha 22": 26.0}
+  },
+
+  "m_initial_pile_weight": {
+    "Posição 1": {"Pilha 11": 5.9, "Pilha 12": 0.0, "Pilha 13": 0.0},
+    "Posição 2": {"Pilha 21": 27.0, "Pilha 22": 0.0}
+  },
+
+  "m_dailyCapacity": 10.0,
+
+  "m_to_equipment": {
+    "Posição 1": {
+      "Pilha 11": [4.5, 1.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "Pilha 12": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.1, 4.5, 4.5, 4.5, 4.5, 4.5, 1.4, 0.0],
+      "Pilha 13": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    "Posição 2": {
+      "Pilha 21": [0.0, 3.1, 4.5, 4.5, 4.5, 4.5, 4.5, 1.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "Pilha 22": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.1, 4.5]
+    }
+  },
+
+  "m_target_quality": {
+    "FeT": 0.62,
+    "SiO2": 0.051,
+    "Al2O3": 0.0143
+  }
+}
