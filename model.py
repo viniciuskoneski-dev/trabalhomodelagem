@@ -36,39 +36,28 @@ def gurobi_model(data):
     to_equip = data["m_to_equipment"]
     target_qual = data["m_target_quality"]
     daily_cap = data["m_dailyCapacity"]
-    m_pile_initial_weight = data["m_initial_pile_weight"]
 
     # --- Vars ---
-    # 1. Quantidade de minério m enviado para a pilha p na posição ps no período t
     x = model.addVars(
-        [(t, m, ps, p) 
-         for t in range(Periods) 
-         for m in Products
-         for ps in PilePositions
-         for p in Piles[ps]], 
+        [(t, m, ps, p) for t in range(Periods) for m in Products for ps in PilePositions for p in Piles[ps]], 
         name="x", vtype=GRB.CONTINUOUS, lb=0
     )
     
-    # 2. Massa total da pilha p na posição ps no final do período t
     pile_mass = model.addVars(
-        [(t, ps, p) 
-         for t in range(Periods)
-         for ps in PilePositions
-         for p in Piles[ps]],
+        [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="pile_mass", vtype=GRB.CONTINUOUS, lb=0
     )
 
-    # 3. Variáveis de desvio de qualidade (Falta e Sobra)
     dev_pos = model.addVars(
         [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
         name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
     )
+    
     dev_neg = model.addVars(
         [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
         name="dev_neg", vtype=GRB.CONTINUOUS, lb=0
     )
 
-    # 4. Variável de atendimento real da demanda (Sinterização)
     saida_real = model.addVars(
         [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="saida_real", vtype=GRB.CONTINUOUS, lb=0
@@ -117,12 +106,11 @@ def gurobi_model(data):
             name=f"cap_patio_{t}"
         )
 
-    # 5. Respeito dos status das pilhas 
+    # 5. Respeito dos status das pilhas (Revertido para a igualdade exata original)
     for ps in PilePositions:
         for p in Piles[ps]:
             for t in range(Periods):
                 status = p_status[ps][p][t]
-                
                 entrada = gp.quicksum(x[t, m, ps, p] for m in Products)
                 
                 if status == "VAZIA":
@@ -140,21 +128,20 @@ def gurobi_model(data):
                 elif status == "CONSUMO":
                     model.addConstr(entrada == 0, name=f"consumo_in_{t}_{ps}_{p}")
 
-   # 6. Restrição de Balanço de Qualidade Alvo (Com correção da Massa Inicial)
+    # 6. Restrição de Balanço de Qualidade Alvo (Loop ineficiente extraído)
     for ps in PilePositions:
         for p in Piles[ps]:
             massa_inicial = p_weight_init[ps][p]
             
+            # Cálculo de massa posicionado acima do loop de qualidade (computado apenas 1x por pilha)
+            massa_total_entrada = gp.quicksum(x[t, m, ps, p] for t in range(Periods) for m in Products)
+            massa_total = massa_total_entrada + massa_inicial
+            
             for q in QualityIndicators:
                 alvo = target_qual[q]
-                
-                # Material adicionado (x)
                 massa_qual_entrada = gp.quicksum(x[t, m, ps, p] * qual[m][q] for t in range(Periods) for m in Products)
-                massa_total_entrada = gp.quicksum(x[t, m, ps, p] for t in range(Periods) for m in Products)
                 
-                # Equação Final: Adicionamos a Massa Inicial assumindo que ela possui qualidade equivalente ao 'alvo'
                 qual_total = massa_qual_entrada + (massa_inicial * alvo)
-                massa_total = massa_total_entrada + massa_inicial
                 
                 model.addConstr(qual_total - (massa_total * alvo) == dev_pos[ps, p, q] - dev_neg[ps, p, q], name=f"qual_bal_{ps}_{p}_{q}")
 
@@ -176,7 +163,7 @@ def gurobi_model(data):
                     name=f"target_weight_{ps}_{p}"
                 )
 
-    # ----- Função objetivo -----
+    # ----- Função objetivo Pura -----
     model.setObjective(
         gp.quicksum(dev_pos[ps, p, q] + dev_neg[ps, p, q] for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
         sense=GRB.MINIMIZE 
@@ -184,8 +171,8 @@ def gurobi_model(data):
 
     model.optimize()
     has_solution = model.Status in [GRB.OPTIMAL, GRB.TIME_LIMIT] and model.SolCount > 0
+    
     return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
-
 
 ## ------- STREAMLIT FRONT-END -------
 
@@ -358,13 +345,130 @@ elif aba_selecionada == "Código do Modelo":
 
 elif aba_selecionada == "Resultados":
     st.header("Resultados do Modelo")
-    
-    if st.button("Executar Modelo", type="primary"):
-        with st.spinner("Resolvendo modelo..."):
-            has_solution, model = gurobi_model(data)
-            
-            if has_solution:
-                st.success(f"Solução ótima encontrada. OF: {model.ObjVal:.4f}")
+    st.divider()
+
+    # Criação das Abas Solicitadas
+    aba1, aba2, aba3 = st.tabs(["Visão Geral", "Movimentações de Compra", "Status das Pilhas"])
+
+    # --- ABA 1: VISÃO GERAL ---
+    with aba1:
+        st.header("Status do Problema")
+        
+        if st.button("Executar Otimização", type="primary", key="run_opt"):
+            with st.spinner("Resolvendo modelo..."):
+                # CORREÇÃO DA FALHA 1: Desempacotamento correto das variáveis
+                has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real = gurobi_model(data)
                 
+                if has_solution:
+                    st.success("✅ Solução ótima encontrada!")
+                    st.metric(label="Valor da Função Objetivo (Minimização de Desvios)", value=f"{model.ObjVal:.4f}")
+                    
+                    # Salvando os resultados extraídos no session_state para persistência entre as abas
+                    st.session_state['solved'] = True
+                    st.session_state['x_vals'] = {(t, m, ps, p): x[t, m, ps, p].X for t, m, ps, p in x.keys()}
+                    st.session_state['mass_vals'] = {(t, ps, p): pile_mass[t, ps, p].X for t, ps, p in pile_mass.keys()}
+                else:
+                    st.error("❌ Não foi possível encontrar solução viável para os dados fornecidos.")
+                    st.session_state['solved'] = False
+                    
+        if 'solved' in st.session_state and st.session_state['solved']:
+            st.info("Navegue pelas abas acima para explorar o detalhamento das compras e a composição dinâmica das pilhas.")
+
+    # --- ABA 2: MOVIMENTAÇÕES DE COMPRA ---
+    with aba2:
+        st.header("Movimentações por Período e Fornecedor")
+        
+        if 'solved' in st.session_state and st.session_state['solved']:
+            # Mapeamento reverso para saber qual fornecedor entrega qual minério
+            prod_to_sup = {}
+            for sup, prods in data["SupplierProducts"].items():
+                for pr in prods:
+                    prod_to_sup[pr] = sup
+            for pr in data["Products"]:
+                if pr not in prod_to_sup:
+                    prod_to_sup[pr] = "Ferrovia / Direto da Mina"
+                    
+            movs = []
+            x_vals = st.session_state['x_vals']
+            
+            # Filtrando apenas as movimentações que realmente ocorreram
+            for (t, m, ps, p), val in x_vals.items():
+                if val > 1e-4:
+                    movs.append({
+                        "Período": t + 1,
+                        "Fornecedor": prod_to_sup[m],
+                        "Pilha de Destino": f"{ps} - {p}",
+                        "Minério": m,
+                        "Quantidade Movimentada (kt)": round(val, 3)
+                    })
+            
+            if movs:
+                df_movs = pd.DataFrame(movs)
+                
+                # Agrupamento exigido para mostrar o total por fornecedor/pilha no período
+                df_grouped = df_movs.groupby(["Período", "Fornecedor", "Pilha de Destino"]).agg(
+                    Total_Movimentado_kt=("Quantidade Movimentada (kt)", "sum"),
+                    Minérios_Envolvidos=("Minério", lambda x: ", ".join(x))
+                ).reset_index()
+                
+                st.dataframe(df_grouped, use_container_width=True, hide_index=True)
+                
+                with st.expander("Ver detalhamento granular por minério"):
+                    st.dataframe(df_movs, use_container_width=True, hide_index=True)
             else:
-                st.error("Não foi possível encontrar solução viável.")
+                st.warning("Nenhuma movimentação foi realizada pelo modelo.")
+        else:
+            st.warning("Execute o modelo na aba 'Visão Geral' primeiro.")
+
+    # --- ABA 3: STATUS DAS PILHAS ---
+    with aba3:
+        st.header("Evolução de Massa e Composição por Pilha")
+        
+        if 'solved' in st.session_state and st.session_state['solved']:
+            x_vals = st.session_state['x_vals']
+            mass_vals = st.session_state['mass_vals']
+            
+            for ps in data["PilePositions"]:
+                for p in data["Piles"][ps]:
+                    st.subheader(f"{ps} - {p}")
+                    
+                    pile_data = []
+                    # Acumulador para calcular as porcentagens dinâmicas
+                    acc_ores = {m: 0.0 for m in data["Products"]}
+                    massa_inicial = data["m_initial_pile_weight"][ps][p]
+                    
+                    for t in range(15): # 15 períodos definidos no modelo
+                        status = data["k_pile_status"][ps][p][t]
+                        current_mass = mass_vals[(t, ps, p)]
+                        
+                        # Atualiza o acumulador com os materiais que entraram na pilha
+                        for m in data["Products"]:
+                            acc_ores[m] += x_vals[(t, m, ps, p)]
+                        
+                        total_acc = sum(acc_ores.values()) + massa_inicial
+                        
+                        row = {
+                            "Período": t + 1,
+                            "Status": status,
+                            "Massa Total (kt)": round(current_mass, 3)
+                        }
+                        
+                        # Cálculo de porcentagem de cada minério adicionado até o momento
+                        if total_acc > 1e-4:
+                            if massa_inicial > 0:
+                                row["% Massa Inicial"] = f"{(massa_inicial / total_acc) * 100:.1f}%"
+                            for m, val in acc_ores.items():
+                                if val > 1e-4:
+                                    row[f"% {m}"] = f"{(val / total_acc) * 100:.1f}%"
+                        else:
+                            if massa_inicial > 0:
+                                row["% Massa Inicial"] = "100.0%"
+                            
+                        pile_data.append(row)
+                    
+                    # Exibindo a tabela formatada, substituindo NaNs (minérios não usados) por vazios para ficar legível
+                    df_pile = pd.DataFrame(pile_data).set_index("Período").fillna("-")
+                    st.dataframe(df_pile, use_container_width=True)
+                    st.divider()
+        else:
+            st.warning("Execute o modelo na aba 'Visão Geral' primeiro.")
