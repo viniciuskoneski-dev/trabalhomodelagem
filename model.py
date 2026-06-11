@@ -24,12 +24,15 @@ def gurobi_model(data):
     SupplierProducts = data["SupplierProducts"]
     PilePositions = data["PilePositions"]
     Piles = data["Piles"]
+    
+    # Filtrando quais produtos vêm por trem para otimizar a criação de variáveis
+    mat_route = data["k_material_route"]
+    RailProducts = [m for m in Products if mat_route[m] == "Rail"]
 
     # ---- Param ------
     avail = data["m_product_delivery_availabity"]
     qual = data["m_product_quality"]
     train_cap = data["m_train_capacity"]
-    mat_route = data["k_material_route"]
     p_status = data["k_pile_status"]
     p_weight_target = data["m_pile_weight"]
     p_weight_init = data["m_initial_pile_weight"]
@@ -62,6 +65,12 @@ def gurobi_model(data):
         [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="saida_real", vtype=GRB.CONTINUOUS, lb=0
     )
+    
+    # NOVA VARIÁVEL: Binária para escolha do trem e minério exclusivo por dia
+    y_train = model.addVars(
+        [(t, m) for t in range(Periods) for m in RailProducts],
+        name="y_train", vtype=GRB.BINARY
+    )
 
     # ---- Restrições ----
     # 1. Balanceamento de massa da pilha
@@ -89,15 +98,21 @@ def gurobi_model(data):
                 name=f"cap_forn_{t}_{f}"
             )
 
-    # 3. Restrições de capacidade do trem por produto (Modais ferroviários)
+    # 3. Restrições de transporte ferroviário (Modificadas)
     for t in range(Periods):
-        for m in Products:
-            if mat_route[m] == "Rail":
-                cap_trem = train_cap[m]
-                model.addConstr(
-                    gp.quicksum(x[t, m, ps, p] for ps in PilePositions for p in Piles[ps]) <= cap_trem,
-                    name=f"cap_trem_{t}_{m}"
-                )
+        # 3.1 - Exclusividade: No máximo 1 trem chegando por dia (para 1 único minério ferroviário)
+        model.addConstr(
+            gp.quicksum(y_train[t, m] for m in RailProducts) <= 1,
+            name=f"um_trem_exclusivo_dia_{t}"
+        )
+        
+        # 3.2 - Acoplamento da variável binária com a quantidade (Restrição Big-M)
+        for m in RailProducts:
+            cap_trem = train_cap[m]
+            model.addConstr(
+                gp.quicksum(x[t, m, ps, p] for ps in PilePositions for p in Piles[ps]) <= cap_trem * y_train[t, m],
+                name=f"cap_trem_{t}_{m}"
+            )
 
     # 4. Restrição de movimentações máximas no pátio (diário total)
     for t in range(Periods):
@@ -106,7 +121,7 @@ def gurobi_model(data):
             name=f"cap_patio_{t}"
         )
 
-    # 5. Respeito dos status das pilhas (Revertido para a igualdade exata original)
+    # 5. Respeito dos status das pilhas 
     for ps in PilePositions:
         for p in Piles[ps]:
             for t in range(Periods):
@@ -128,12 +143,11 @@ def gurobi_model(data):
                 elif status == "CONSUMO":
                     model.addConstr(entrada == 0, name=f"consumo_in_{t}_{ps}_{p}")
 
-    # 6. Restrição de Balanço de Qualidade Alvo (Loop ineficiente extraído)
+    # 6. Restrição de Balanço de Qualidade Alvo
     for ps in PilePositions:
         for p in Piles[ps]:
             massa_inicial = p_weight_init[ps][p]
             
-            # Cálculo de massa posicionado acima do loop de qualidade (computado apenas 1x por pilha)
             massa_total_entrada = gp.quicksum(x[t, m, ps, p] for t in range(Periods) for m in Products)
             massa_total = massa_total_entrada + massa_inicial
             
@@ -428,12 +442,18 @@ elif aba_selecionada == "Resultados":
             x_vals = st.session_state['x_vals']
             mass_vals = st.session_state['mass_vals']
             
+            # Buscando as qualidades dos minérios e do alvo inicial do json
+            qual = data["m_product_quality"]
+            target_qual = data["m_target_quality"]
+            indicators = data["QualityIndicators"] # ["FeT", "SiO2", "Al2O3"]
+            
             for ps in data["PilePositions"]:
                 for p in data["Piles"][ps]:
                     st.subheader(f"{ps} - {p}")
                     
                     pile_data = []
-                    # Acumulador para calcular as porcentagens dinâmicas
+                    
+                    # Acumulador dos minérios adicionados ao longo do tempo para calcular a mistura (blend)
                     acc_ores = {m: 0.0 for m in data["Products"]}
                     massa_inicial = data["m_initial_pile_weight"][ps][p]
                     
@@ -441,33 +461,49 @@ elif aba_selecionada == "Resultados":
                         status = data["k_pile_status"][ps][p][t]
                         current_mass = mass_vals[(t, ps, p)]
                         
-                        # Atualiza o acumulador com os materiais que entraram na pilha
+                        # 1. Atualiza o acumulador com os materiais que entraram na pilha neste período t
                         for m in data["Products"]:
                             acc_ores[m] += x_vals[(t, m, ps, p)]
                         
-                        total_acc = sum(acc_ores.values()) + massa_inicial
+                        # Massa base (Massa inicial + tudo o que já entrou). Define as porcentagens.
+                        total_base_mass = sum(acc_ores.values()) + massa_inicial
                         
+                        # 2. Cálculo das porcentagens de cada indicador de qualidade no período t
+                        pct_q = {}
+                        for q in indicators:
+                            if total_base_mass > 1e-4:
+                                # Massa pura do indicador presente na massa inicial
+                                q_mass_inicial = massa_inicial * target_qual[q]
+                                # Massa pura do indicador vinda dos minérios comprados/adicionados
+                                q_mass_adicionada = sum(acc_ores[m] * qual[m][q] for m in data["Products"])
+                                
+                                # Mistura final
+                                pct_q[q] = (q_mass_inicial + q_mass_adicionada) / total_base_mass
+                            else:
+                                pct_q[q] = 0.0 # Pilha sem nenhum histórico de massa
+                                
+                        # 3. Montando a linha da tabela padronizada
                         row = {
                             "Período": t + 1,
                             "Status": status,
-                            "Massa Total (kt)": round(current_mass, 3)
+                            "Massa total da pilha (kt)": round(current_mass, 3)
                         }
                         
-                        # Cálculo de porcentagem de cada minério adicionado até o momento
-                        if total_acc > 1e-4:
-                            if massa_inicial > 0:
-                                row["% Massa Inicial"] = f"{(massa_inicial / total_acc) * 100:.1f}%"
-                            for m, val in acc_ores.items():
-                                if val > 1e-4:
-                                    row[f"% {m}"] = f"{(val / total_acc) * 100:.1f}%"
-                        else:
-                            if massa_inicial > 0:
-                                row["% Massa Inicial"] = "100.0%"
-                            
+                        # Adicionando as colunas exigidas dinamicamente
+                        for q in indicators:
+                            if current_mass > 1e-4:
+                                # A massa bruta atual é a % do blend vezes a massa total presente no momento t
+                                q_bruta = current_mass * pct_q[q]
+                                row[f"Quantidade bruta de {q} (kt)"] = round(q_bruta, 3)
+                                row[f"Quantidade em porcentagem de {q} (%)"] = f"{pct_q[q] * 100:.3f}%"
+                            else:
+                                # Se a pilha estiver vazia, não há massa e exibimos "-" para a %
+                                row[f"Quantidade bruta de {q} (kt)"] = 0.0
+                                row[f"Quantidade em porcentagem de {q} (%)"] = "-"
+                                
                         pile_data.append(row)
                     
-                    # Exibindo a tabela formatada, substituindo NaNs (minérios não usados) por vazios para ficar legível
-                    df_pile = pd.DataFrame(pile_data).set_index("Período").fillna("-")
+                    df_pile = pd.DataFrame(pile_data).set_index("Período")
                     st.dataframe(df_pile, use_container_width=True)
                     st.divider()
         else:
