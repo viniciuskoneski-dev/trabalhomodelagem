@@ -25,7 +25,7 @@ def gurobi_model(data):
     PilePositions = data["PilePositions"]
     Piles = data["Piles"]
     
-    # Filtrando quais produtos vêm por trem para otimizar a criação de variáveis
+    # Filtrando quais produtos vem por trem
     mat_route = data["k_material_route"]
     RailProducts = [m for m in Products if mat_route[m] == "Rail"]
 
@@ -41,36 +41,43 @@ def gurobi_model(data):
     daily_cap = data["m_dailyCapacity"]
 
     # --- Vars ---
+    # Variável x: Quantidade de minério m (em kt) adicionada à pilha p na posição ps durante o período t
     x = model.addVars(
         [(t, m, ps, p) for t in range(Periods) for m in Products for ps in PilePositions for p in Piles[ps]], 
         name="x", vtype=GRB.CONTINUOUS, lb=0
     )
     
+    # Massa total acumulada  da pilha p na posição ps ao final do período t
     pile_mass = model.addVars(
         [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="pile_mass", vtype=GRB.CONTINUOUS, lb=0
     )
 
-    dev_pos = model.addVars(
-        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
-        name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
-    )
-    
-    dev_neg = model.addVars(
-        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
-        name="dev_neg", vtype=GRB.CONTINUOUS, lb=0
-    )
-
+    #Quantidade de minério  enviada da pilha p  para a Sinterização no período t
     saida_real = model.addVars(
         [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="saida_real", vtype=GRB.CONTINUOUS, lb=0
     )
     
-    # NOVA VARIÁVEL: Binária para escolha do trem e minério exclusivo por dia
+    # Variável y_train: Variável de decisão binária (1 = Sim, 0 = Não) que indica se o trem contendo o minério m foi utilizado no período t
     y_train = model.addVars(
         [(t, m) for t in range(Periods) for m in RailProducts],
         name="y_train", vtype=GRB.BINARY
     )
+
+    # Desvio positivo em relação ao alvo do indicador de qualidade q na pilha p
+    dev_pos = model.addVars(
+        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
+        name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
+    )
+
+    # ---- Variaveis auxiliares ----
+    # Desvio negativo em relação ao alvo do indicador de qualidade q na pilha p
+    dev_neg = model.addVars(
+        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
+        name="dev_neg", vtype=GRB.CONTINUOUS, lb=0
+    )
+
 
     # ---- Restrições ----
     # 1. Balanceamento de massa da pilha
@@ -98,15 +105,15 @@ def gurobi_model(data):
                 name=f"cap_forn_{t}_{f}"
             )
 
-    # 3. Restrições de transporte ferroviário (Modificadas)
+    # 3. Restrições de transporte ferroviário 
     for t in range(Periods):
-        # 3.1 - Exclusividade: No máximo 1 trem chegando por dia (para 1 único minério ferroviário)
+        # 3.1 - Exclusividade: No máximo 1 trem chegando por dia
         model.addConstr(
             gp.quicksum(y_train[t, m] for m in RailProducts) <= 1,
             name=f"um_trem_exclusivo_dia_{t}"
         )
         
-        # 3.2 - Acoplamento da variável binária com a quantidade (Restrição Big-M)
+        # 3.2 - Acoplamento da variável binária com a quantidade
         for m in RailProducts:
             cap_trem = train_cap[m]
             model.addConstr(
@@ -177,9 +184,12 @@ def gurobi_model(data):
                     name=f"target_weight_{ps}_{p}"
                 )
 
-    # ----- Função objetivo Pura -----
+    # ----- Função objetivo -----
+    # A penalidade é dividida pelo alvo (target_qual) para normalizar os desvios.
+    # Assim, o modelo avalia o erro proporcional (%), e não apenas a massa absoluta, 
+    # dando a mesma importância para desvios em elementos majoritários (Fe) e minoritários (P, Al2O3).
     model.setObjective(
-        gp.quicksum(dev_pos[ps, p, q] + dev_neg[ps, p, q] for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
+        gp.quicksum((dev_pos[ps, p, q] + dev_neg[ps, p, q]) / (target_qual[q] if target_qual[q] > 0 else 1) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
         sense=GRB.MINIMIZE 
     )
 
@@ -361,8 +371,8 @@ elif aba_selecionada == "Resultados":
     st.header("Resultados do Modelo")
     st.divider()
 
-    # Criação das Abas Solicitadas
-    aba1, aba2, aba3 = st.tabs(["Visão Geral", "Movimentações de Compra", "Status das Pilhas"])
+    # Criação das 4 Abas Solicitadas
+    aba1, aba2, aba3, aba4 = st.tabs(["Visão Geral", "Movimentações de Compra", "Status das Pilhas", "Sintetização"])
 
     # --- ABA 1: VISÃO GERAL ---
     with aba1:
@@ -370,14 +380,12 @@ elif aba_selecionada == "Resultados":
         
         if st.button("Executar Otimização", type="primary", key="run_opt"):
             with st.spinner("Resolvendo modelo..."):
-                # CORREÇÃO DA FALHA 1: Desempacotamento correto das variáveis
                 has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real = gurobi_model(data)
                 
                 if has_solution:
                     st.success("✅ Solução ótima encontrada!")
                     st.metric(label="Valor da Função Objetivo (Minimização de Desvios)", value=f"{model.ObjVal:.4f}")
                     
-                    # Salvando os resultados extraídos no session_state para persistência entre as abas
                     st.session_state['solved'] = True
                     st.session_state['x_vals'] = {(t, m, ps, p): x[t, m, ps, p].X for t, m, ps, p in x.keys()}
                     st.session_state['mass_vals'] = {(t, ps, p): pile_mass[t, ps, p].X for t, ps, p in pile_mass.keys()}
@@ -386,14 +394,13 @@ elif aba_selecionada == "Resultados":
                     st.session_state['solved'] = False
                     
         if 'solved' in st.session_state and st.session_state['solved']:
-            st.info("Navegue pelas abas acima para explorar o detalhamento das compras e a composição dinâmica das pilhas.")
+            st.info("Navegue pelas abas acima para explorar o detalhamento das compras, composição das pilhas e qualidade de sintetização.")
 
     # --- ABA 2: MOVIMENTAÇÕES DE COMPRA ---
     with aba2:
         st.header("Movimentações por Período e Fornecedor")
         
         if 'solved' in st.session_state and st.session_state['solved']:
-            # Mapeamento reverso para saber qual fornecedor entrega qual minério
             prod_to_sup = {}
             for sup, prods in data["SupplierProducts"].items():
                 for pr in prods:
@@ -405,7 +412,6 @@ elif aba_selecionada == "Resultados":
             movs = []
             x_vals = st.session_state['x_vals']
             
-            # Filtrando apenas as movimentações que realmente ocorreram
             for (t, m, ps, p), val in x_vals.items():
                 if val > 1e-4:
                     movs.append({
@@ -419,12 +425,19 @@ elif aba_selecionada == "Resultados":
             if movs:
                 df_movs = pd.DataFrame(movs)
                 
-                # Agrupamento exigido para mostrar o total por fornecedor/pilha no período
+                # NOVO: Gráfico de barras da quantidade de movimentações feitas por período
+                st.subheader("Total Movimentado por Período")
+                df_chart = df_movs.groupby("Período")["Quantidade Movimentada (kt)"].sum().reset_index()
+                df_chart = df_chart.set_index("Período")
+                st.bar_chart(df_chart)
+                
+                # Tabela de Movimentações Agrupada
                 df_grouped = df_movs.groupby(["Período", "Fornecedor", "Pilha de Destino"]).agg(
                     Total_Movimentado_kt=("Quantidade Movimentada (kt)", "sum"),
                     Minérios_Envolvidos=("Minério", lambda x: ", ".join(x))
                 ).reset_index()
                 
+                st.subheader("Tabela de Movimentações")
                 st.dataframe(df_grouped, use_container_width=True, hide_index=True)
                 
                 with st.expander("Ver detalhamento granular por minério"):
@@ -441,70 +454,159 @@ elif aba_selecionada == "Resultados":
         if 'solved' in st.session_state and st.session_state['solved']:
             x_vals = st.session_state['x_vals']
             mass_vals = st.session_state['mass_vals']
-            
-            # Buscando as qualidades dos minérios e do alvo inicial do json
             qual = data["m_product_quality"]
             target_qual = data["m_target_quality"]
-            indicators = data["QualityIndicators"] # ["FeT", "SiO2", "Al2O3"]
+            indicators = data["QualityIndicators"]
             
             for ps in data["PilePositions"]:
                 for p in data["Piles"][ps]:
                     st.subheader(f"{ps} - {p}")
                     
                     pile_data = []
-                    
-                    # Acumulador dos minérios adicionados ao longo do tempo para calcular a mistura (blend)
                     acc_ores = {m: 0.0 for m in data["Products"]}
                     massa_inicial = data["m_initial_pile_weight"][ps][p]
                     
-                    for t in range(15): # 15 períodos definidos no modelo
+                    for t in range(15):
                         status = data["k_pile_status"][ps][p][t]
                         current_mass = mass_vals[(t, ps, p)]
                         
-                        # 1. Atualiza o acumulador com os materiais que entraram na pilha neste período t
                         for m in data["Products"]:
                             acc_ores[m] += x_vals[(t, m, ps, p)]
                         
-                        # Massa base (Massa inicial + tudo o que já entrou). Define as porcentagens.
                         total_base_mass = sum(acc_ores.values()) + massa_inicial
                         
-                        # 2. Cálculo das porcentagens de cada indicador de qualidade no período t
                         pct_q = {}
                         for q in indicators:
                             if total_base_mass > 1e-4:
-                                # Massa pura do indicador presente na massa inicial
                                 q_mass_inicial = massa_inicial * target_qual[q]
-                                # Massa pura do indicador vinda dos minérios comprados/adicionados
                                 q_mass_adicionada = sum(acc_ores[m] * qual[m][q] for m in data["Products"])
-                                
-                                # Mistura final
                                 pct_q[q] = (q_mass_inicial + q_mass_adicionada) / total_base_mass
                             else:
-                                pct_q[q] = 0.0 # Pilha sem nenhum histórico de massa
+                                pct_q[q] = 0.0
                                 
-                        # 3. Montando a linha da tabela padronizada
                         row = {
                             "Período": t + 1,
                             "Status": status,
                             "Massa total da pilha (kt)": round(current_mass, 3)
                         }
                         
-                        # Adicionando as colunas exigidas dinamicamente
                         for q in indicators:
                             if current_mass > 1e-4:
-                                # A massa bruta atual é a % do blend vezes a massa total presente no momento t
                                 q_bruta = current_mass * pct_q[q]
                                 row[f"Quantidade bruta de {q} (kt)"] = round(q_bruta, 3)
                                 row[f"Quantidade em porcentagem de {q} (%)"] = f"{pct_q[q] * 100:.3f}%"
                             else:
-                                # Se a pilha estiver vazia, não há massa e exibimos "-" para a %
                                 row[f"Quantidade bruta de {q} (kt)"] = 0.0
                                 row[f"Quantidade em porcentagem de {q} (%)"] = "-"
                                 
                         pile_data.append(row)
                     
                     df_pile = pd.DataFrame(pile_data).set_index("Período")
+                    
+                    # NOVO: Gráfico de Linha da Evolução da Massa
+                    st.line_chart(df_pile["Massa total da pilha (kt)"], color="#FF4B4B")
+                    
+                    # Tabela padronizada
                     st.dataframe(df_pile, use_container_width=True)
                     st.divider()
+        else:
+            st.warning("Execute o modelo na aba 'Visão Geral' primeiro.")
+
+    # --- ABA 4: SINTETIZAÇÃO ---
+    with aba4:
+        st.header("Qualidade do Minério Enviado para Sintetização")
+        
+        if 'solved' in st.session_state and st.session_state['solved']:
+            x_vals = st.session_state['x_vals']
+            to_equip = data["m_to_equipment"]
+            qual = data["m_product_quality"]
+            target_qual = data["m_target_quality"]
+            
+            for ps in data["PilePositions"]:
+                st.subheader(f"Posição: {ps}")
+                sint_data = []
+                
+                # Listas para armazenar os dados dos gráficos nativos
+                chart_labels = []
+                fet_real, fet_alvo = [], []
+                sio2_real, sio2_alvo = [], []
+                al2o3_real, al2o3_alvo = [], []
+                
+                # Percorrer o tempo para ver quais pilhas estão enviando massa para o equipamento
+                for t in range(15):
+                    for p in data["Piles"][ps]:
+                        demanda = to_equip[ps][p][t]
+                        
+                        if demanda > 1e-4:
+                            acc_ores = {m: 0.0 for m in data["Products"]}
+                            massa_inicial = data["m_initial_pile_weight"][ps][p]
+                            
+                            for tau in range(t + 1): 
+                                for m in data["Products"]:
+                                    acc_ores[m] += x_vals[(tau, m, ps, p)]
+                            
+                            total_base_mass = sum(acc_ores.values()) + massa_inicial
+                            
+                            row = {"Período": t + 1, "Pilha de origem": p}
+                            label = f"P{t+1} ({p})"
+                            
+                            if total_base_mass > 1e-4:
+                                # Cálculos de Qualidade Real vs Alvo para FeT
+                                pct_fet = ((massa_inicial * target_qual["FeT"]) + sum(acc_ores[m] * qual[m]["FeT"] for m in data["Products"])) / total_base_mass
+                                row["Qualidade de FeT (%)"] = f"{pct_fet * 100:.3f}%"
+                                fet_real.append(pct_fet * 100)
+                                fet_alvo.append(target_qual["FeT"] * 100)
+                                
+                                # Cálculos de Qualidade Real vs Alvo para SiO2
+                                pct_sio2 = ((massa_inicial * target_qual["SiO2"]) + sum(acc_ores[m] * qual[m]["SiO2"] for m in data["Products"])) / total_base_mass
+                                row["Qualidade de SiO2 (%)"] = f"{pct_sio2 * 100:.3f}%"
+                                sio2_real.append(pct_sio2 * 100)
+                                sio2_alvo.append(target_qual["SiO2"] * 100)
+                                
+                                # Cálculos de Qualidade Real vs Alvo para Al2O3
+                                pct_al2o3 = ((massa_inicial * target_qual["Al2O3"]) + sum(acc_ores[m] * qual[m]["Al2O3"] for m in data["Products"])) / total_base_mass
+                                row["Qualidade de Al2O3 (%)"] = f"{pct_al2o3 * 100:.3f}%"
+                                al2o3_real.append(pct_al2o3 * 100)
+                                al2o3_alvo.append(target_qual["Al2O3"] * 100)
+                                
+                                chart_labels.append(label)
+                            else:
+                                row["Qualidade de FeT (%)"] = "-"
+                                row["Qualidade de SiO2 (%)"] = "-"
+                                row["Qualidade de Al2O3 (%)"] = "-"
+                                
+                            sint_data.append(row)
+                            
+                if sint_data:
+                    st.markdown("**Comparativo Realizado vs Alvo por Indicador de Qualidade**")
+                    
+                    # Dividindo os gráficos em 3 colunas para um layout mais limpo
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown("**FeT (%)**")
+                        df_fet = pd.DataFrame({"Real (Barra Claro)": fet_real, "Alvo (Barra Escuro)": fet_alvo}, index=chart_labels)
+                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.bar_chart(df_fet, color=["#87CEEB", "#00008B"], height=300, stack=False)
+                        
+                    with col2:
+                        st.markdown("**SiO2 (%)**")
+                        df_sio2 = pd.DataFrame({"Real (Barra Claro)": sio2_real, "Alvo (Barra Escuro)": sio2_alvo}, index=chart_labels)
+                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.bar_chart(df_sio2, color=["#FF7F7F", "#8B0000"], height=300, stack=False)
+                        
+                    with col3:
+                        st.markdown("**Al2O3 (%)**")
+                        df_al2o3 = pd.DataFrame({"Real (Barra Claro)": al2o3_real, "Alvo (Barra Escuro)": al2o3_alvo}, index=chart_labels)
+                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.bar_chart(df_al2o3, color=["#90EE90", "#006400"], height=300, stack=False)
+                    
+                    # Exibição da tabela de dados estruturada abaixo dos gráficos
+                    st.subheader("Detalhamento da Qualidade")
+                    df_sint = pd.DataFrame(sint_data).set_index("Período")
+                    st.dataframe(df_sint, use_container_width=True)
+                else:
+                    st.info(f"Nenhuma sintetização programada para as pilhas pertencentes à {ps}.")
+                st.divider()
         else:
             st.warning("Execute o modelo na aba 'Visão Geral' primeiro.")
