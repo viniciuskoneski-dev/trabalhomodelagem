@@ -13,7 +13,7 @@ def carregar_dados(filepath="data_piles.json"):
 
 data = carregar_dados()
 
-def gurobi_model(data):
+def gurobi_model(data, objective_type="1"):
     
     model = gp.Model("Pile_Case_UFMG")
 
@@ -186,12 +186,51 @@ def gurobi_model(data):
                     name=f"target_weight_{ps}_{p}"
                 )
 
-    # ----- Função objetivo -----
-    #Busca minimiizar a porcentagem total do desvio de qualidade
-    model.setObjective(
-        gp.quicksum((dev_pos[ps, p, q] + dev_neg[ps, p, q]) / (target_qual[q] if target_qual[q] > 0 else 1) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
-        sense=GRB.MINIMIZE 
-    )
+    # ----- Seleção da Função Objetivo -----
+    if objective_type == "1":
+        # 1. Minimizar o erro em %
+        model.setObjective(
+            gp.quicksum((dev_pos[ps, p, q] + dev_neg[ps, p, q]) / (target_qual[q] if target_qual[q] > 0 else 1) 
+                        for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
+            sense=GRB.MINIMIZE 
+        )
+    
+    elif objective_type == "2":
+        # 2. Minimizar o erro absoluto bruto
+        model.setObjective(
+            gp.quicksum(dev_pos[ps, p, q] + dev_neg[ps, p, q] 
+                        for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
+            sense=GRB.MINIMIZE 
+        )
+        
+    elif objective_type == "3":
+        # 3. Minimizar a variância (Erro Quadrático Relativo)
+        model.setObjective(
+            gp.quicksum(
+                (dev_pos[ps, p, q] * dev_pos[ps, p, q] + dev_neg[ps, p, q] * dev_neg[ps, p, q]) / 
+                ((target_qual[q] ** 2) if target_qual[q] > 0 else 1)
+                for ps in PilePositions for p in Piles[ps] for q in QualityIndicators
+            ),
+            sense=GRB.MINIMIZE 
+        )
+        
+    elif objective_type == "4":
+        # 4. Minimizar o maior desvio (Problema Min-Max)
+        max_dev = model.addVar(name="max_dev", vtype=GRB.CONTINUOUS, lb=0)
+        
+        for ps in PilePositions:
+            for p in Piles[ps]:
+                for q in QualityIndicators:
+                    target = target_qual[q] if target_qual[q] > 0 else 1
+                    # Garante que o max_dev seja maior ou igual a qualquer desvio percentual de qualquer pilha
+                    model.addConstr(max_dev >= (dev_pos[ps, p, q] + dev_neg[ps, p, q]) / target, name=f"minmax_{ps}_{p}_{q}")
+                    
+        model.setObjective(max_dev, sense=GRB.MINIMIZE)
+
+    model.optimize()
+    has_solution = model.Status in [GRB.OPTIMAL, GRB.TIME_LIMIT] and model.SolCount > 0
+    
+    return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
 
     model.optimize()
     has_solution = model.Status in [GRB.OPTIMAL, GRB.TIME_LIMIT] and model.SolCount > 0
@@ -383,9 +422,25 @@ elif aba_selecionada == "Resultados":
     with aba1:
         st.header("Status do Problema")
         
-        if st.button("Executar Otimização", type="primary", key="run_opt"):
-            with st.spinner("Resolvendo modelo..."):
-                has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real = gurobi_model(data)
+        st.markdown("**Selecione a abordagem de Função Objetivo para executar a Otimização:**")
+        
+        # Criação de um layout com 4 botões paralelos
+        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+        run_1 = col_btn1.button("1. Minimizar Erro (%)", use_container_width=True, type="primary")
+        run_2 = col_btn2.button("2. Minimizar Erro Absoluto", use_container_width=True, type="primary")
+        run_3 = col_btn3.button("3. Minimizar Variância", use_container_width=True, type="primary")
+        run_4 = col_btn4.button("4. Minimizar Maior Desvio", use_container_width=True, type="primary")
+        
+        # Define qual FO será rodada com base no clique
+        fo_selecionada = None
+        if run_1: fo_selecionada = "1"
+        elif run_2: fo_selecionada = "2"
+        elif run_3: fo_selecionada = "3"
+        elif run_4: fo_selecionada = "4"
+        
+        if fo_selecionada:
+            with st.spinner(f"Resolvendo modelo com a Função Objetivo {fo_selecionada}..."):
+                has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real = gurobi_model(data, objective_type=fo_selecionada)
                 
                 if has_solution:
                     st.success("✅ Solução ótima encontrada!")
@@ -402,24 +457,22 @@ elif aba_selecionada == "Resultados":
                                 entrada_total = sum(x[t, m, ps, p].X for t in range(15) for m in data["Products"])
                                 massa_base = massa_inicial + entrada_total
                                 
-                                # Só calcula a média para as pilhas que de fato receberam/tinham massa
                                 if massa_base > 1e-4:
                                     alvo = data["m_target_quality"][q]
                                     q_mass_inicial = massa_inicial * alvo
                                     q_mass_adicionada = sum(x[t, m, ps, p].X * data["m_product_quality"][m][q] for t in range(15) for m in data["Products"])
                                     pct_q = (q_mass_inicial + q_mass_adicionada) / massa_base
                                     
-                                    # Desvio em proporção ao alvo (ex: alvo 62, fez 62.62 -> desvio de 1%)
                                     desvio_relativo = (abs(pct_q - alvo) / alvo) * 100
                                     soma_desvio_q += desvio_relativo
                                     qtd_pilhas_avaliadas += 1
                                     
-                        # Armazena a média final do indicador
                         medias_desvios_pct[q] = (soma_desvio_q / qtd_pilhas_avaliadas) if qtd_pilhas_avaliadas > 0 else 0.0
                     
                     # Salvando no session_state
                     st.session_state['solved'] = True
                     st.session_state['obj_val'] = model.ObjVal
+                    st.session_state['fo_used'] = fo_selecionada
                     st.session_state['medias_desvios_pct'] = medias_desvios_pct
                     st.session_state['x_vals'] = {(t, m, ps, p): x[t, m, ps, p].X for t, m, ps, p in x.keys()}
                     st.session_state['mass_vals'] = {(t, ps, p): pile_mass[t, ps, p].X for t, ps, p in pile_mass.keys()}
@@ -432,8 +485,17 @@ elif aba_selecionada == "Resultados":
             st.divider()
             st.subheader("Métricas Operacionais Obtidas")
             
-            # Linha 1: Métricas globais
-            st.metric(label="Valor da Solução Ótima (F.O.)", value=f"{st.session_state['obj_val']:.4f}")
+            # Mapenado nome dinâmico para a métrica de valor ótimo
+            fo_name_map = {
+                "1": "Erro Relativo (%)",
+                "2": "Erro Absoluto (kt)",
+                "3": "Variância Relativa (Erros Quadráticos)",
+                "4": "Min-Max (Pior Desvio Relativo)"
+            }
+            fo_name = fo_name_map.get(st.session_state.get('fo_used', "1"), "Erro Relativo (%)")
+            
+            # Linha 1: Valor Ótimo com label dinâmico correspondente ao botão pressionado
+            st.metric(label=f"Valor da Solução Ótima [F.O. - {fo_name}]", value=f"{st.session_state['obj_val']:.4f}")
             
             st.markdown("##### Média de Desvio por Indicador de Qualidade")
             st.caption("Representa o erro médio das pilhas em relação à qualidade alvo de 100%. Quanto mais próximo de zero, melhor.")
@@ -450,7 +512,7 @@ elif aba_selecionada == "Resultados":
                 st.metric(label="Média de Erro - Al2O3", value=f"{medias.get('Al2O3', 0):.2f}%")
             
             st.divider()
-            st.info("Navegue pelas abas acima para explorar o detalhamento das compras, composição das pilhas e qualidade de sintetização.")
+            st.info("Navegue pelas abas acima para explorar o detalhamento das compras, composição das pilhas e qualidade de sintetização geradas pela Função selecionada.")
 
     # --- ABA 2: MOVIMENTAÇÕES DE COMPRA ---
     with aba2:
