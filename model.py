@@ -4,6 +4,7 @@ import json
 import gurobipy as gp
 from gurobipy import GRB
 from streamlit_pdf_viewer import pdf_viewer
+import os
 
 @st.cache_data
 def carregar_dados(filepath="data_piles.json"):
@@ -41,7 +42,7 @@ def gurobi_model(data):
     daily_cap = data["m_dailyCapacity"]
 
     # --- Vars ---
-    # Variável x: Quantidade de minério m (em kt) adicionada à pilha p na posição ps durante o período t
+    # Quantidade de minério m adicionada à pilha p na posição ps durante o período t
     x = model.addVars(
         [(t, m, ps, p) for t in range(Periods) for m in Products for ps in PilePositions for p in Piles[ps]], 
         name="x", vtype=GRB.CONTINUOUS, lb=0
@@ -53,29 +54,30 @@ def gurobi_model(data):
         name="pile_mass", vtype=GRB.CONTINUOUS, lb=0
     )
 
-    #Quantidade de minério  enviada da pilha p  para a Sinterização no período t
+    # Quantidade de minério  enviada da pilha p  para a Sinterização no período t
     saida_real = model.addVars(
         [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
         name="saida_real", vtype=GRB.CONTINUOUS, lb=0
     )
     
-    # Variável y_train: Variável de decisão binária (1 = Sim, 0 = Não) que indica se o trem contendo o minério m foi utilizado no período t
+    # Variável de decisão binária que indica se o trem contendo o minério m foi utilizado no período t
     y_train = model.addVars(
         [(t, m) for t in range(Periods) for m in RailProducts],
         name="y_train", vtype=GRB.BINARY
     )
 
-    # Desvio positivo em relação ao alvo do indicador de qualidade q na pilha p
-    dev_pos = model.addVars(
-        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
-        name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
-    )
 
     # ---- Variaveis auxiliares ----
     # Desvio negativo em relação ao alvo do indicador de qualidade q na pilha p
     dev_neg = model.addVars(
         [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
         name="dev_neg", vtype=GRB.CONTINUOUS, lb=0
+    )
+
+    # Desvio positivo em relação ao alvo do indicador de qualidade q na pilha p
+    dev_pos = model.addVars(
+        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
+        name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
     )
 
 
@@ -113,7 +115,7 @@ def gurobi_model(data):
             name=f"um_trem_exclusivo_dia_{t}"
         )
         
-        # 3.2 - Acoplamento da variável binária com a quantidade
+        # 3.2 - Restrição de quantidade
         for m in RailProducts:
             cap_trem = train_cap[m]
             model.addConstr(
@@ -121,7 +123,7 @@ def gurobi_model(data):
                 name=f"cap_trem_{t}_{m}"
             )
 
-    # 4. Restrição de movimentações máximas no pátio (diário total)
+    # 4. Restrição de movimentações máximas no pátio 
     for t in range(Periods):
         model.addConstr(
             gp.quicksum(x[t, m, ps, p] for m in Products for ps in PilePositions for p in Piles[ps]) <= daily_cap,
@@ -185,9 +187,7 @@ def gurobi_model(data):
                 )
 
     # ----- Função objetivo -----
-    # A penalidade é dividida pelo alvo (target_qual) para normalizar os desvios.
-    # Assim, o modelo avalia o erro proporcional (%), e não apenas a massa absoluta, 
-    # dando a mesma importância para desvios em elementos majoritários (Fe) e minoritários (P, Al2O3).
+    #Busca minimiizar a porcentagem total do desvio de qualidade
     model.setObjective(
         gp.quicksum((dev_pos[ps, p, q] + dev_neg[ps, p, q]) / (target_qual[q] if target_qual[q] > 0 else 1) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
         sense=GRB.MINIMIZE 
@@ -216,7 +216,7 @@ with st.sidebar:
 
     aba_selecionada = st.radio(
         "Ir para:",
-        ["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"]
+        ["Relatório de explicação do código", "Dados de Entrada", "Código do Modelo", "Resultados"]
     )
     
     st.divider()
@@ -225,13 +225,18 @@ with st.sidebar:
 
 # tab_pdf, tab_input, tab_code, tab_output = st.tabs(["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"])
 
-if aba_selecionada == "Material auxiliar":
-    st.header("Material Auxiliar")
-    st.markdown("""
-    Apresentação do case:
-    """)
+if aba_selecionada == "Relatório de explicação do código":
+    st.header("Relatório de explicação do código")
 
-    pdf_viewer("Case_UFMG2026.pdf")
+    pdf_path = "Relatorio - entrega parcial.pdf"
+    
+    if os.path.exists(pdf_path):
+        st.markdown("Relatório:")
+        pdf_viewer(pdf_path)
+    else:
+        st.error(f"❌ Arquivo '{pdf_path}' não encontrado!")
+        st.info("Certifique-se de que o PDF está salvo **exatamente com esse nome** e na mesma pasta em que o sistema está sendo executado.")
+        st.code(f"Pasta atual onde o sistema está procurando: {os.path.abspath(os.getcwd())}")
 
 elif aba_selecionada == "Dados de Entrada":
 
@@ -384,16 +389,67 @@ elif aba_selecionada == "Resultados":
                 
                 if has_solution:
                     st.success("✅ Solução ótima encontrada!")
-                    st.metric(label="Valor da Função Objetivo (Minimização de Desvios)", value=f"{model.ObjVal:.4f}")
                     
+                    # 1. Cálculo das médias de desvios relativos (%) por indicador de qualidade
+                    medias_desvios_pct = {}
+                    for q in data["QualityIndicators"]:
+                        soma_desvio_q = 0.0
+                        qtd_pilhas_avaliadas = 0
+                        
+                        for ps in data["PilePositions"]:
+                            for p in data["Piles"][ps]:
+                                massa_inicial = data["m_initial_pile_weight"][ps][p]
+                                entrada_total = sum(x[t, m, ps, p].X for t in range(15) for m in data["Products"])
+                                massa_base = massa_inicial + entrada_total
+                                
+                                # Só calcula a média para as pilhas que de fato receberam/tinham massa
+                                if massa_base > 1e-4:
+                                    alvo = data["m_target_quality"][q]
+                                    q_mass_inicial = massa_inicial * alvo
+                                    q_mass_adicionada = sum(x[t, m, ps, p].X * data["m_product_quality"][m][q] for t in range(15) for m in data["Products"])
+                                    pct_q = (q_mass_inicial + q_mass_adicionada) / massa_base
+                                    
+                                    # Desvio em proporção ao alvo (ex: alvo 62, fez 62.62 -> desvio de 1%)
+                                    desvio_relativo = (abs(pct_q - alvo) / alvo) * 100
+                                    soma_desvio_q += desvio_relativo
+                                    qtd_pilhas_avaliadas += 1
+                                    
+                        # Armazena a média final do indicador
+                        medias_desvios_pct[q] = (soma_desvio_q / qtd_pilhas_avaliadas) if qtd_pilhas_avaliadas > 0 else 0.0
+                    
+                    # Salvando no session_state
                     st.session_state['solved'] = True
+                    st.session_state['obj_val'] = model.ObjVal
+                    st.session_state['medias_desvios_pct'] = medias_desvios_pct
                     st.session_state['x_vals'] = {(t, m, ps, p): x[t, m, ps, p].X for t, m, ps, p in x.keys()}
                     st.session_state['mass_vals'] = {(t, ps, p): pile_mass[t, ps, p].X for t, ps, p in pile_mass.keys()}
                 else:
                     st.error("❌ Não foi possível encontrar solução viável para os dados fornecidos.")
                     st.session_state['solved'] = False
                     
+        # Exibição das métricas caso o modelo tenha sido executado com sucesso
         if 'solved' in st.session_state and st.session_state['solved']:
+            st.divider()
+            st.subheader("Métricas Operacionais Obtidas")
+            
+            # Linha 1: Métricas globais
+            st.metric(label="Valor da Solução Ótima (F.O.)", value=f"{st.session_state['obj_val']:.4f}")
+            
+            st.markdown("##### Média de Desvio por Indicador de Qualidade")
+            st.caption("Representa o erro médio das pilhas em relação à qualidade alvo de 100%. Quanto mais próximo de zero, melhor.")
+            
+            # Linha 2: Desvios médios divididos pelas mineralógicas 
+            col_d1, col_d2, col_d3 = st.columns(3)
+            medias = st.session_state['medias_desvios_pct']
+            
+            with col_d1:
+                st.metric(label="Média de Erro - FeT", value=f"{medias.get('FeT', 0):.2f}%")
+            with col_d2:
+                st.metric(label="Média de Erro - SiO2", value=f"{medias.get('SiO2', 0):.2f}%")
+            with col_d3:
+                st.metric(label="Média de Erro - Al2O3", value=f"{medias.get('Al2O3', 0):.2f}%")
+            
+            st.divider()
             st.info("Navegue pelas abas acima para explorar o detalhamento das compras, composição das pilhas e qualidade de sintetização.")
 
     # --- ABA 2: MOVIMENTAÇÕES DE COMPRA ---
@@ -401,6 +457,7 @@ elif aba_selecionada == "Resultados":
         st.header("Movimentações por Período e Fornecedor")
         
         if 'solved' in st.session_state and st.session_state['solved']:
+            # Mapeamento reverso para saber qual fornecedor entrega qual minério
             prod_to_sup = {}
             for sup, prods in data["SupplierProducts"].items():
                 for pr in prods:
@@ -412,6 +469,7 @@ elif aba_selecionada == "Resultados":
             movs = []
             x_vals = st.session_state['x_vals']
             
+            # Filtrando apenas as movimentações que realmente ocorreram (> 0)
             for (t, m, ps, p), val in x_vals.items():
                 if val > 1e-4:
                     movs.append({
@@ -425,23 +483,19 @@ elif aba_selecionada == "Resultados":
             if movs:
                 df_movs = pd.DataFrame(movs)
                 
-                # NOVO: Gráfico de barras da quantidade de movimentações feitas por período
+                # Gráfico de barras da quantidade de movimentações feitas por período
                 st.subheader("Total Movimentado por Período")
                 df_chart = df_movs.groupby("Período")["Quantidade Movimentada (kt)"].sum().reset_index()
                 df_chart = df_chart.set_index("Período")
                 st.bar_chart(df_chart)
                 
-                # Tabela de Movimentações Agrupada
-                df_grouped = df_movs.groupby(["Período", "Fornecedor", "Pilha de Destino"]).agg(
-                    Total_Movimentado_kt=("Quantidade Movimentada (kt)", "sum"),
-                    Minérios_Envolvidos=("Minério", lambda x: ", ".join(x))
-                ).reset_index()
-                
+                # Tabela de Movimentações (Agora exibindo linha por linha sem aglutinar minérios)
                 st.subheader("Tabela de Movimentações")
-                st.dataframe(df_grouped, use_container_width=True, hide_index=True)
                 
-                with st.expander("Ver detalhamento granular por minério"):
-                    st.dataframe(df_movs, use_container_width=True, hide_index=True)
+                # Ordenação para manter a leitura fluida: primeiro pelo Período, depois por Fornecedor e Minério
+                df_display = df_movs.sort_values(by=["Período", "Fornecedor", "Minério"])
+                
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
             else:
                 st.warning("Nenhuma movimentação foi realizada pelo modelo.")
         else:
@@ -526,11 +580,11 @@ elif aba_selecionada == "Resultados":
                 st.subheader(f"Posição: {ps}")
                 sint_data = []
                 
-                # Listas para armazenar os dados dos gráficos nativos
+                # Listas para armazenar os dados normalizados dos gráficos
                 chart_labels = []
-                fet_real, fet_alvo = [], []
-                sio2_real, sio2_alvo = [], []
-                al2o3_real, al2o3_alvo = [], []
+                fet_real_norm, fet_alvo_norm = [], []
+                sio2_real_norm, sio2_alvo_norm = [], []
+                al2o3_real_norm, al2o3_alvo_norm = [], []
                 
                 # Percorrer o tempo para ver quais pilhas estão enviando massa para o equipamento
                 for t in range(15):
@@ -551,23 +605,29 @@ elif aba_selecionada == "Resultados":
                             label = f"P{t+1} ({p})"
                             
                             if total_base_mass > 1e-4:
-                                # Cálculos de Qualidade Real vs Alvo para FeT
+                                # ---------------- FeT ----------------
                                 pct_fet = ((massa_inicial * target_qual["FeT"]) + sum(acc_ores[m] * qual[m]["FeT"] for m in data["Products"])) / total_base_mass
+                                # Tabela mantém o valor bruto
                                 row["Qualidade de FeT (%)"] = f"{pct_fet * 100:.3f}%"
-                                fet_real.append(pct_fet * 100)
-                                fet_alvo.append(target_qual["FeT"] * 100)
+                                # Gráfico recebe o valor normalizado em relação ao alvo
+                                fet_real_norm.append((pct_fet / target_qual["FeT"]) * 100)
+                                fet_alvo_norm.append(100.0)
                                 
-                                # Cálculos de Qualidade Real vs Alvo para SiO2
+                                # ---------------- SiO2 ----------------
                                 pct_sio2 = ((massa_inicial * target_qual["SiO2"]) + sum(acc_ores[m] * qual[m]["SiO2"] for m in data["Products"])) / total_base_mass
+                                # Tabela mantém o valor bruto
                                 row["Qualidade de SiO2 (%)"] = f"{pct_sio2 * 100:.3f}%"
-                                sio2_real.append(pct_sio2 * 100)
-                                sio2_alvo.append(target_qual["SiO2"] * 100)
+                                # Gráfico recebe o valor normalizado em relação ao alvo
+                                sio2_real_norm.append((pct_sio2 / target_qual["SiO2"]) * 100)
+                                sio2_alvo_norm.append(100.0)
                                 
-                                # Cálculos de Qualidade Real vs Alvo para Al2O3
+                                # ---------------- Al2O3 ----------------
                                 pct_al2o3 = ((massa_inicial * target_qual["Al2O3"]) + sum(acc_ores[m] * qual[m]["Al2O3"] for m in data["Products"])) / total_base_mass
+                                # Tabela mantém o valor bruto
                                 row["Qualidade de Al2O3 (%)"] = f"{pct_al2o3 * 100:.3f}%"
-                                al2o3_real.append(pct_al2o3 * 100)
-                                al2o3_alvo.append(target_qual["Al2O3"] * 100)
+                                # Gráfico recebe o valor normalizado em relação ao alvo
+                                al2o3_real_norm.append((pct_al2o3 / target_qual["Al2O3"]) * 100)
+                                al2o3_alvo_norm.append(100.0)
                                 
                                 chart_labels.append(label)
                             else:
@@ -578,31 +638,29 @@ elif aba_selecionada == "Resultados":
                             sint_data.append(row)
                             
                 if sint_data:
-                    st.markdown("**Comparativo Realizado vs Alvo por Indicador de Qualidade**")
+                    st.markdown("**Comparativo Relativo: Real vs Alvo (Normalizado para 100%)**")
+                    st.caption("A barra escura representa a meta travada em 100%. A barra clara mostra o percentual de desvio atingido.")
                     
                     # Dividindo os gráficos em 3 colunas para um layout mais limpo
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        st.markdown("**FeT (%)**")
-                        df_fet = pd.DataFrame({"Real (Barra Claro)": fet_real, "Alvo (Barra Escuro)": fet_alvo}, index=chart_labels)
-                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.markdown("**FeT (Proporção do Alvo)**")
+                        df_fet = pd.DataFrame({"Real (% do Alvo)": fet_real_norm, "Meta (100%)": fet_alvo_norm}, index=chart_labels)
                         st.bar_chart(df_fet, color=["#87CEEB", "#00008B"], height=300, stack=False)
                         
                     with col2:
-                        st.markdown("**SiO2 (%)**")
-                        df_sio2 = pd.DataFrame({"Real (Barra Claro)": sio2_real, "Alvo (Barra Escuro)": sio2_alvo}, index=chart_labels)
-                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.markdown("**SiO2 (Proporção do Alvo)**")
+                        df_sio2 = pd.DataFrame({"Real (% do Alvo)": sio2_real_norm, "Meta (100%)": sio2_alvo_norm}, index=chart_labels)
                         st.bar_chart(df_sio2, color=["#FF7F7F", "#8B0000"], height=300, stack=False)
                         
                     with col3:
-                        st.markdown("**Al2O3 (%)**")
-                        df_al2o3 = pd.DataFrame({"Real (Barra Claro)": al2o3_real, "Alvo (Barra Escuro)": al2o3_alvo}, index=chart_labels)
-                        # Adicionado stack=False para colocar as barras lado a lado
+                        st.markdown("**Al2O3 (Proporção do Alvo)**")
+                        df_al2o3 = pd.DataFrame({"Real (% do Alvo)": al2o3_real_norm, "Meta (100%)": al2o3_alvo_norm}, index=chart_labels)
                         st.bar_chart(df_al2o3, color=["#90EE90", "#006400"], height=300, stack=False)
                     
                     # Exibição da tabela de dados estruturada abaixo dos gráficos
-                    st.subheader("Detalhamento da Qualidade")
+                    st.subheader("Detalhamento da Qualidade (Valores Absolutos)")
                     df_sint = pd.DataFrame(sint_data).set_index("Período")
                     st.dataframe(df_sint, use_container_width=True)
                 else:
