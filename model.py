@@ -232,11 +232,6 @@ def gurobi_model(data, objective_type="1"):
     
     return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
 
-    model.optimize()
-    has_solution = model.Status in [GRB.OPTIMAL, GRB.TIME_LIMIT] and model.SolCount > 0
-    
-    return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
-
 ## ------- STREAMLIT FRONT-END -------
 
 st.set_page_config(layout="wide", page_title="Case Otimização UFMG")
@@ -255,7 +250,7 @@ with st.sidebar:
 
     aba_selecionada = st.radio(
         "Ir para:",
-        ["Relatório de explicação do código", "Dados de Entrada", "Código do Modelo", "Resultados"]
+        ["Apresentação do problema", "Dados de Entrada", "Código do Modelo", "Resultados"]
     )
     
     st.divider()
@@ -264,13 +259,13 @@ with st.sidebar:
 
 # tab_pdf, tab_input, tab_code, tab_output = st.tabs(["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"])
 
-if aba_selecionada == "Relatório de explicação do código":
-    st.header("Relatório de explicação do código")
+if aba_selecionada == "Apresentação do problema":
+    st.header("Apresentação do problema")
 
-    pdf_path = "Relatorio - entrega parcial.pdf"
+    pdf_path = "apresentacao.pdf"
     
     if os.path.exists(pdf_path):
-        st.markdown("Relatório:")
+        st.markdown("Apresentação:")
         pdf_viewer(pdf_path)
     else:
         st.error(f"❌ Arquivo '{pdf_path}' não encontrado!")
@@ -407,7 +402,224 @@ elif aba_selecionada == "Código do Modelo":
     
     code_snippet = '''
 
-    exemplo
+    def gurobi_model(data, objective_type="1"):
+    
+    model = gp.Model("Pile_Case_UFMG")
+
+    # ----- Sets ------
+    Periods = 15
+    Products = data["Products"]
+    QualityIndicators = data["QualityIndicators"]
+    Suppliers = data["Suppliers"]
+    SupplierProducts = data["SupplierProducts"]
+    PilePositions = data["PilePositions"]
+    Piles = data["Piles"]
+    
+    # Filtrando quais produtos vem por trem
+    mat_route = data["k_material_route"]
+    RailProducts = [m for m in Products if mat_route[m] == "Rail"]
+
+    # ---- Param ------
+    avail = data["m_product_delivery_availabity"]
+    qual = data["m_product_quality"]
+    train_cap = data["m_train_capacity"]
+    p_status = data["k_pile_status"]
+    p_weight_target = data["m_pile_weight"]
+    p_weight_init = data["m_initial_pile_weight"]
+    to_equip = data["m_to_equipment"]
+    target_qual = data["m_target_quality"]
+    daily_cap = data["m_dailyCapacity"]
+
+    # --- Vars ---
+    # Quantidade de minério m adicionada à pilha p na posição ps durante o período t
+    x = model.addVars(
+        [(t, m, ps, p) for t in range(Periods) for m in Products for ps in PilePositions for p in Piles[ps]], 
+        name="x", vtype=GRB.CONTINUOUS, lb=0
+    )
+    
+    # Massa total acumulada  da pilha p na posição ps ao final do período t
+    pile_mass = model.addVars(
+        [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
+        name="pile_mass", vtype=GRB.CONTINUOUS, lb=0
+    )
+
+    # Quantidade de minério  enviada da pilha p  para a Sinterização no período t
+    saida_real = model.addVars(
+        [(t, ps, p) for t in range(Periods) for ps in PilePositions for p in Piles[ps]],
+        name="saida_real", vtype=GRB.CONTINUOUS, lb=0
+    )
+    
+    # Variável de decisão binária que indica se o trem contendo o minério m foi utilizado no período t
+    y_train = model.addVars(
+        [(t, m) for t in range(Periods) for m in RailProducts],
+        name="y_train", vtype=GRB.BINARY
+    )
+
+
+    # ---- Variaveis auxiliares ----
+    # Desvio negativo em relação ao alvo do indicador de qualidade q na pilha p
+    dev_neg = model.addVars(
+        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
+        name="dev_neg", vtype=GRB.CONTINUOUS, lb=0
+    )
+
+    # Desvio positivo em relação ao alvo do indicador de qualidade q na pilha p
+    dev_pos = model.addVars(
+        [(ps, p, q) for ps in PilePositions for p in Piles[ps] for q in QualityIndicators],
+        name="dev_pos", vtype=GRB.CONTINUOUS, lb=0
+    )
+
+
+    # ---- Restrições ----
+    # 1. Balanceamento de massa da pilha
+    for ps in PilePositions:
+        for p in Piles[ps]:
+            for t in range(Periods):
+                entrada = gp.quicksum(x[t, m, ps, p] for m in Products)
+                saida_esperada = to_equip[ps][p][t]
+                
+                model.addConstr(saida_real[t, ps, p] == saida_esperada, name=f"demanda_exata_{t}_{ps}_{p}")
+
+                if t == 0:
+                    massa_inicial = p_weight_init[ps][p]
+                    model.addConstr(pile_mass[t, ps, p] == massa_inicial + entrada - saida_real[t, ps, p], name=f"bal_mass_0_{ps}_{p}")
+                else:
+                    model.addConstr(pile_mass[t, ps, p] == pile_mass[t-1, ps, p] + entrada - saida_real[t, ps, p], name=f"bal_mass_{t}_{ps}_{p}")
+
+    # 2. Restrições de capacidade diária do fornecedor (Modais rodoviários)
+    for t in range(Periods):
+        for f in Suppliers:
+            cap_f_t = data["m_supplier_delivery_capacity"][f][t]
+            prods_f = SupplierProducts[f]
+            model.addConstr(
+                gp.quicksum(x[t, m, ps, p] for m in prods_f for ps in PilePositions for p in Piles[ps]) <= cap_f_t,
+                name=f"cap_forn_{t}_{f}"
+            )
+
+    # 3. Restrições de transporte ferroviário 
+    for t in range(Periods):
+        # 3.1 - Exclusividade: No máximo 1 trem chegando por dia
+        model.addConstr(
+            gp.quicksum(y_train[t, m] for m in RailProducts) <= 1,
+            name=f"um_trem_exclusivo_dia_{t}"
+        )
+        
+        # 3.2 - Restrição de quantidade
+        for m in RailProducts:
+            cap_trem = train_cap[m]
+            model.addConstr(
+                gp.quicksum(x[t, m, ps, p] for ps in PilePositions for p in Piles[ps]) <= cap_trem * y_train[t, m],
+                name=f"cap_trem_{t}_{m}"
+            )
+
+    # 4. Restrição de movimentações máximas no pátio 
+    for t in range(Periods):
+        model.addConstr(
+            gp.quicksum(x[t, m, ps, p] for m in Products for ps in PilePositions for p in Piles[ps]) <= daily_cap,
+            name=f"cap_patio_{t}"
+        )
+
+    # 5. Respeito dos status das pilhas 
+    for ps in PilePositions:
+        for p in Piles[ps]:
+            for t in range(Periods):
+                status = p_status[ps][p][t]
+                entrada = gp.quicksum(x[t, m, ps, p] for m in Products)
+                
+                if status == "VAZIA":
+                    model.addConstr(entrada == 0, name=f"vazia_in_{t}_{ps}_{p}")
+                    model.addConstr(saida_real[t, ps, p] == 0, name=f"vazia_out_{t}_{ps}_{p}")
+                    model.addConstr(pile_mass[t, ps, p] == 0, name=f"vazia_mass_{t}_{ps}_{p}")
+                    
+                elif status == "CONSTRUCAO":
+                    model.addConstr(saida_real[t, ps, p] == 0, name=f"const_out_{t}_{ps}_{p}")
+                    
+                elif status == "PRONTA":
+                    model.addConstr(entrada == 0, name=f"pronta_in_{t}_{ps}_{p}")
+                    model.addConstr(saida_real[t, ps, p] == 0, name=f"pronta_out_{t}_{ps}_{p}")
+                    
+                elif status == "CONSUMO":
+                    model.addConstr(entrada == 0, name=f"consumo_in_{t}_{ps}_{p}")
+
+    # 6. Restrição de Balanço de Qualidade Alvo
+    for ps in PilePositions:
+        for p in Piles[ps]:
+            massa_inicial = p_weight_init[ps][p]
+            
+            massa_total_entrada = gp.quicksum(x[t, m, ps, p] for t in range(Periods) for m in Products)
+            massa_total = massa_total_entrada + massa_inicial
+            
+            for q in QualityIndicators:
+                alvo = target_qual[q]
+                massa_qual_entrada = gp.quicksum(x[t, m, ps, p] * qual[m][q] for t in range(Periods) for m in Products)
+                
+                qual_total = massa_qual_entrada + (massa_inicial * alvo)
+                
+                model.addConstr(qual_total - (massa_total * alvo) == dev_pos[ps, p, q] - dev_neg[ps, p, q], name=f"qual_bal_{ps}_{p}_{q}")
+
+    # 7. Restrição de Disponibilidade Máxima do Produto
+    for m in Products:
+        max_disp = avail[m]["max"]
+        model.addConstr(
+            gp.quicksum(x[t, m, ps, p] for t in range(Periods) for ps in PilePositions for p in Piles[ps]) <= max_disp,
+            name=f"disp_prod_{m}"
+        )
+
+    # 8. Restrição de meta de massa final
+    for ps in PilePositions:
+        for p in Piles[ps]:
+            if ps in p_weight_target and p in p_weight_target[ps]:
+                target_w = p_weight_target[ps][p]
+                model.addConstr(
+                    gp.quicksum(x[t, m, ps, p] for t in range(Periods) for m in Products) == target_w,
+                    name=f"target_weight_{ps}_{p}"
+                )
+
+    # ----- Seleção da Função Objetivo -----
+    if objective_type == "1":
+        # 1. Minimizar o erro em %
+        model.setObjective(
+            gp.quicksum((dev_pos[ps, p, q] + dev_neg[ps, p, q]) / (target_qual[q] if target_qual[q] > 0 else 1) 
+                        for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
+            sense=GRB.MINIMIZE 
+        )
+    
+    elif objective_type == "2":
+        # 2. Minimizar o erro absoluto bruto
+        model.setObjective(
+            gp.quicksum(dev_pos[ps, p, q] + dev_neg[ps, p, q] 
+                        for ps in PilePositions for p in Piles[ps] for q in QualityIndicators),
+            sense=GRB.MINIMIZE 
+        )
+        
+    elif objective_type == "3":
+        # 3. Minimizar a variância (Erro Quadrático Relativo)
+        model.setObjective(
+            gp.quicksum(
+                (dev_pos[ps, p, q] * dev_pos[ps, p, q] + dev_neg[ps, p, q] * dev_neg[ps, p, q]) / 
+                ((target_qual[q] ** 2) if target_qual[q] > 0 else 1)
+                for ps in PilePositions for p in Piles[ps] for q in QualityIndicators
+            ),
+            sense=GRB.MINIMIZE 
+        )
+        
+    elif objective_type == "4":
+        # 4. Minimizar o maior desvio (Problema Min-Max)
+        max_dev = model.addVar(name="max_dev", vtype=GRB.CONTINUOUS, lb=0)
+        
+        for ps in PilePositions:
+            for p in Piles[ps]:
+                for q in QualityIndicators:
+                    target = target_qual[q] if target_qual[q] > 0 else 1
+                    # Garante que o max_dev seja maior ou igual a qualquer desvio percentual de qualquer pilha
+                    model.addConstr(max_dev >= (dev_pos[ps, p, q] + dev_neg[ps, p, q]) / target, name=f"minmax_{ps}_{p}_{q}")
+                    
+        model.setObjective(max_dev, sense=GRB.MINIMIZE)
+
+    model.optimize()
+    has_solution = model.Status in [GRB.OPTIMAL, GRB.TIME_LIMIT] and model.SolCount > 0
+    
+    return has_solution, model, x, pile_mass, dev_pos, dev_neg, saida_real
     '''
     st.code(code_snippet, language='python')
 
