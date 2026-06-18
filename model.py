@@ -250,7 +250,7 @@ with st.sidebar:
 
     aba_selecionada = st.radio(
         "Ir para:",
-        ["Apresentação do problema", "Dados de Entrada", "Código do Modelo", "Resultados"]
+        ["Apresentação do problema", "Vídeo explicativo", "Dados de Entrada", "Código do Modelo", "Resultados"]
     )
     
     st.divider()
@@ -271,6 +271,10 @@ if aba_selecionada == "Apresentação do problema":
         st.error(f"❌ Arquivo '{pdf_path}' não encontrado!")
         st.info("Certifique-se de que o PDF está salvo **exatamente com esse nome** e na mesma pasta em que o sistema está sendo executado.")
         st.code(f"Pasta atual onde o sistema está procurando: {os.path.abspath(os.getcwd())}")
+
+elif aba_selecionada == "Vídeo explicativo":
+    st.header("Vídeo Explicativo")
+    st.video("https://youtu.be/JdQrbtGn5pQ")
 
 elif aba_selecionada == "Dados de Entrada":
 
