@@ -254,7 +254,7 @@ with st.sidebar:
     )
     
     st.divider()
-    st.caption("Material desenvolvido e elaborado por Cassotis Consulting")
+    st.caption("Trabalho de modelagem - Vinícius Koneski")
 
 
 # tab_pdf, tab_input, tab_code, tab_output = st.tabs(["Material auxiliar", "Dados de Entrada", "Código do Modelo", "Resultados"])
@@ -401,8 +401,8 @@ elif aba_selecionada == "Dados de Entrada":
 
 
 elif aba_selecionada == "Código do Modelo":
-    st.header("Instanciando o Modelo")
-    st.markdown("Exemplo da estruturação dos conjuntos e parâmetros a partir dos dados de entrada:")
+    st.header("Modelo matemático construído")
+    st.markdown("Abaixo está a implementação do código feito para a otimização das pilhas.")
     
     code_snippet = '''
 
